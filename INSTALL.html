@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html dir="ltr" class="client-js" lang="en"><head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+<title>SystemWall Installation Instructions</title>
+<meta charset="UTF-8">
+<meta name="generator" content="MediaWiki 1.20.4">
+
+<body>
+		<!-- content -->
+		<div id="content" class="mw-body">
+			<a id="top"></a>
+			<div id="mw-js-message" style="display:none;"></div>
+			<!-- bodyContent -->
+			<div id="bodyContent">
+
+								<!-- bodycontent -->
+				<div id="mw-content-text" dir="ltr" class="mw-content-ltr" lang="en">
+
+<h1> <span class="mw-headline" id="SystemWall_Prototype_Setup"> SystemWall Prototype Setup </span></h1>
+<h2> <span class="mw-headline" id="Hardware_Setup"> Hardware Setup </span></h2>
+<p>Targer configuration:
+</p>
+<ul><li> FireWire card (connected to matching card on SystemWall computer)
+</li><li> Ethernet port, eth0 (connected to SystemWall computer)
+</li></ul>
+<p>SystemWall computer configuration:
+</p>
+<ul><li> FireWire card (connected to matching card on Target computer)
+</li><li> Ethernet port, eth0 (connected to Internet)
+</li><li> Ethernet port, eth1 (connected to Target computer)
+</li></ul>
+<h2> <span class="mw-headline" id="Needed_files"> Needed files </span></h2>
+<ul><li> systemwall-pktqueue.py -- Netfilter packet processing script, calls into Volatility plugin
+</li><li> syswall.py -- Volatility plugin
+</li><li> DummyWhiteList.txt -- Sample white list of programs allowed to make connection, used by syswall.py
+</li></ul>
+<h2> <span class="mw-headline" id="SystemWall_computer_setup"> SystemWall computer setup </span></h2>
+<p><span style="color:#0000ff">(Target)</span> -- perform the tasks on the target computer, here 172.28.20.102
+</p><p><span style="color:#9932CC">(SystemWall)</span> -- perform the tasks on the SystemWall computer, here 172.28.20.103
+</p><p><b>Create a transparent bridge</b> 
+</p><p><span style="color:#9932CC">(SystemWall)</span> Create a transparent bridge through which all communication to target computer will go <a rel="nofollow" class="external autonumber" href="http://www.lungstruck.com/compy/linux-transparent-bridge/">[1]</a>.  Install bridge utils and configure brige interfaces:
+</p>
+<pre> sudo apt-get install bridge-utils
+ sudo vim /etc/network/interfaces
+</pre>
+<p><span style="color:#9932CC">(SystemWall)</span> Append the following 
+to the network interfaces configuration file (this assumes eth0 is 
+default interface, already connected to internet and getting IP from 
+DHCP):
+</p>
+<pre> auto br0
+ iface br0 inet dhcp
+      bridge_ports eth0 eth1
+      bridge_stp on
+</pre>
+<p><span style="color:#9932CC">(SystemWall)</span> Bring br0 up:
+</p>
+<pre> sudo ifup br0
+</pre>
+<p><b>Install NFQUEUE related packages</b>
+</p><p><span style="color:#9932CC">(SystemWall)</span> Install netfilter queues code:
+</p>
+<pre> sudo apt-get install -y python-nfqueue
+ sudo apt-get install -y python-dpkt
+</pre>
+<p><b>Set up packet detection / delay</b>
+</p><p><span style="color:#9932CC">(SystemWall)</span> We're using iptables, show current rules
+</p>
+<pre> sudo iptables -x -v --line-numbers -L
+</pre>
+<p><span style="color:#9932CC">(SystemWall)</span> Add SYSTEMWALL chain 
+(so we don't mess with rules in other chains), and add rules in FORWARD 
+to send all TCP packets to or from target system to be processed in 
+SYSTEMWALL chain:
+</p>
+<pre> sudo iptables -N SYSTEMWALL
+ sudo iptables -A FORWARD -s 172.28.20.102 -j SYSTEMWALL
+ sudo iptables -A FORWARD -d 172.28.20.102 -j SYSTEMWALL
+</pre>
+<p><span style="color:#9932CC">(SystemWall)</span> Add SYSTEMWALL chain 
+rules for which prackets to process, we want to send all SYN/ACK packets
+ going to target computer to the systemwall-pktqueue.py for processing. 
+ Note, while SystemWall is processing packets, remote host will flood us
+ with duplicate SYN/ACKs, to prevent this we use the <i>limit</i> module and drop packets over the limt, adjust limit to your needs:
+</p>
+<pre> sudo iptables -A SYSTEMWALL -d 172.28.20.102 -p tcp --tcp-flags ALL SYN,ACK -m limit --limit 5/m --limit-burst 1 -j NFQUEUE --queue-num 0
+ sudo iptables -A SYSTEMWALL -d 172.28.20.102 -p tcp --tcp-flags ALL SYN,ACK -j DROP
+</pre>
+<p><b>Set up Volatility framework with FireWire</b>
+</p><p><span style="color:#9932CC">(SystemWall)</span> Install base Volatility 2.3.1 framework using script at bottom of page <a rel="nofollow" class="external autonumber" href="https://code.google.com/p/volatility/wiki/FullInstallation#Linux_Installation">[2]</a>:
+</p>
+<pre> cd ~
+ wget <a rel="nofollow" class="external free" href="https://raw.githubusercontent.com/gleeda/misc-scripts/master/get_plugins_2.0.bsh">https://raw.githubusercontent.com/gleeda/misc-scripts/master/get_plugins_2.0.bsh</a>
+ chmod u+x get_plugins_2.0.bsh
+ ./get_plugins_2.0.bsh
+ cd Volatility
+ python vol.py --info
+</pre>
+<p><span style="color:#9932CC">(SystemWall)</span> Copy SystemWall plugin to volatility directory
+</p>
+<pre> cd ~
+ cp syswall.py Volatility/volatility/plugins/linux/
+</pre>
+<p><span style="color:#9932CC">(SystemWall)</span> Copy DummyWhiteList.txt needed by SystemWall plugin (generate your own base on target system or manually add allowed programs):
+</p>
+<pre> cd ~
+ cp DummyWhiteList.txt Volatility/
+</pre>
+<p><span style="color:#9932CC">(SystemWall)</span> Install forensic1394 library from <a rel="nofollow" class="external free" href="https://github.com/wertarbyte/forensic1394">https://github.com/wertarbyte/forensic1394</a>.
+</p><p><span style="color:#0000ff">(Target)</span> Setup profile for target Linux system (following this page <a rel="nofollow" class="external autonumber" href="https://code.google.com/p/volatility/wiki/LinuxMemoryForensics">[3]</a>), first on target system, generate profile:
+</p>
+<pre> sudo apt-get install dwarfdump 
+ sudo apt-get install build-essential
+ sudo apt-get install linux-headers-$(uname -r)
+ 
+ cd ~
+ svn checkout <a rel="nofollow" class="external free" href="http://volatility.googlecode.com/svn/trunk">http://volatility.googlecode.com/svn/trunk</a> Volatility
+ cd Volatility/tools/linux
+ make
+ 
+ cd ~
+ sudo zip Volatility/volatility/plugins/overlays/linux/Linux-$(uname -r).zip Volatility/tools/linux/module.dwarf /boot/System.map-$(uname -r)
+</pre>
+<p><span style="color:#0000ff">(Target)</span> Then, copy over to the SystemWall computer:
+</p>
+<pre> cd ~
+ scp Volatility/volatility/plugins/overlays/linux/Linux-$(uname -r).zip $USER@172.28.20.103:/home/$USER/Volatility/volatility/plugins/overlays/linux/
+</pre>
+<p><b>Set up systemwall-pktqueue.py</b>
+</p><p><span style="color:#9932CC">(SystemWall)</span> First, test that 
+volatility is working with FireWire, for example with linux_arp plugin 
+to show ARP table of the target computer
+</p>
+<pre> cd ~
+ sudo python vol.py -l firewire://forensic1394//0 --profile=LinuxLinux-3_13_0-24-genericx64 linux_arp
+</pre>
+<p><span style="color:#9932CC">(SystemWall)</span> Now get things going:
+</p>
+<pre> cd ~
+ cp systemwall-pktqueue.py Volatility/
+ cd Volatility/
+ sudo python systemwall-pktqueue.py
+</pre>
+
+<p><b>The End.</b>
+
+<div class="suggestions" style="display: none; font-size: 11px;"><div class="suggestions-results"></div><div class="suggestions-special"></div></div></body></html>
